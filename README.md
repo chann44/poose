@@ -1,4 +1,4 @@
-# migrations
+# Poose 
 
 A tiny, dependency-free database migration tool in the spirit of
 [goose](https://github.com/pressly/goose). Write migrations as plain `.sql`
