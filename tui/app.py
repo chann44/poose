@@ -1,89 +1,128 @@
+from __future__ import annotations
+
+import sqlite3
+
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
-from textual.widgets import Header, Footer, Input, Label, ListItem, ListView
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
 
-CONTENT_MAP = {
-    "overview": "Welcome to the Dashboard!\n\nThis is the main panel. Use the command line below to interact.",
-    "settings": "Settings Configuration:\n\n[ ] Enable notifications\n[x] Dark mode active",
-    "profile": "User Profile:\n\nUsername: TUI_Developer\nRole: Administrator",
-    "logs": "System Logs:\n\n12:00:00 - App started successfully.\n12:01:45 - Command processor initialized.",
-}
+from poose.config import Conf
+from poose.runner import Runner
 
-class SidebarApp(App):
+
+def _table_schemas(cfg: Conf) -> list[tuple[str, str, list[tuple[str, str]]]]:
+    """Return (table_name, create_sql, [(column_name, column_type), ...]) for every table."""
+    conn = sqlite3.connect(cfg.path)
+    try:
+        rows = conn.execute(
+            "SELECT name, sql FROM sqlite_master "
+            "WHERE type = 'table' AND name NOT LIKE 'sqlite_%' "
+            "ORDER BY name"
+        ).fetchall()
+        tables = []
+        for name, sql in rows:
+            cols = conn.execute(f"PRAGMA table_info('{name}')").fetchall()
+            columns = [(c[1], c[2]) for c in cols]
+            tables.append((name, sql or "", columns))
+        return tables
+    finally:
+        conn.close()
+
+
+class PooseTUI(App):
     CSS = """
     Horizontal {
         height: 1fr;
     }
-    
+
     #sidebar {
-        width: 30;
+        width: 44;
         background: $surface;
         border-right: solid $background;
     }
-    
+
+    #sidebar-title {
+        padding: 1 1 0 1;
+        text-style: bold;
+    }
+
     #main-panel {
-        padding: 1;
+        padding: 1 2;
         background: $panel;
     }
-    
-    #content-text {
-        margin-top: 1;
-    }
-    
-    Input {
-        dock: bottom;
-        border: none;
-        background: $surface;
+
+    #main-title {
+        text-style: bold;
+        padding-bottom: 1;
     }
     """
+
+    BINDINGS = [
+        ("r", "refresh", "Refresh"),
+        ("q", "quit", "Quit"),
+    ]
+
+    def __init__(self, cfg: Conf | None = None):
+        super().__init__()
+        self.cfg = cfg or Conf.get_env()
+        self.runner = Runner(self.cfg)
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal():
             with Vertical(id="sidebar"):
-                yield Label("  Navigation", id="sidebar-title")
-                yield ListView(
-                    *[ListItem(Label(item.capitalize()), id=item) for item in CONTENT_MAP.keys()],
-                    id="sidebar-list"
-                )
-            with Vertical(id="main-panel"):
-                yield Label("Content View", variant="title")
-                yield Label(CONTENT_MAP["overview"], id="content-text")
-        
-        yield Input(placeholder=":command", value=":")
+                yield Label("Migrations", id="sidebar-title")
+                yield ListView(id="migration-list")
+            with VerticalScroll(id="main-panel"):
+                yield Label("Database schema", id="main-title")
+                yield Static(id="schema-view")
         yield Footer()
 
-    def on_list_view_selected(self, message: ListView.Selected) -> None:
-        item_id = message.item.id
-        content_label = self.query_one("#content-text", Label)
-        content_label.update(CONTENT_MAP.get(item_id, "No content found."))
+    def on_mount(self) -> None:
+        self.refresh_data()
 
-    def on_input_submitted(self, message: Input.Submitted) -> None:
-        cmd = message.value.strip()
-        
-        if cmd in (":q", ":quit"):
-            self.exit()
-        elif cmd.startswith(":view "):
-            parts = cmd.split(" ", 1)
-            if len(parts) > 1:
-                target = parts[1].strip().lower() 
-                
-                if target in CONTENT_MAP:
-                    content_label = self.query_one("#content-text", Label)
-                    content_label.update(CONTENT_MAP[target])
-                    
-                    sidebar_list = self.query_one("#sidebar-list", ListView)
-                    for index, item in enumerate(sidebar_list.children):
-                        if item.id == target:
-                            sidebar_list.index = index
-                            break
-        
-        message.input.value = ":"
+    def action_refresh(self) -> None:
+        self.refresh_data()
 
-    def on_input_changed(self, message: Input.Changed) -> None:
-        if not message.value.startswith(":"):
-            message.input.value = ":"
+    def refresh_data(self) -> None:
+        self._load_migrations()
+        self._load_schema()
+
+    def _load_migrations(self) -> None:
+        list_view = self.query_one("#migration-list", ListView)
+        list_view.clear()
+        statuses = self.runner.status()
+        if not statuses:
+            list_view.append(ListItem(Label("No migrations found.")))
+            return
+        for s in statuses:
+            mark = "[green]✓[/]" if s.applied else "[yellow]·[/]"
+            list_view.append(ListItem(Label(f"{mark} {s.migration}")))
+
+    def _load_schema(self) -> None:
+        schema_view = self.query_one("#schema-view", Static)
+        tables = _table_schemas(self.cfg)
+        if not tables:
+            schema_view.update("No tables in database.")
+            return
+
+        blocks = []
+        for name, _, columns in tables:
+            header = f"[b $accent]{name}[/]"
+            if columns:
+                body = "\n".join(
+                    f"  {cname:<24} {ctype or 'ANY'}" for cname, ctype in columns
+                )
+            else:
+                body = "  (no columns)"
+            blocks.append(f"{header}\n{body}")
+
+        schema_view.update("\n\n".join(blocks))
+
+
+def run() -> None:
+    PooseTUI().run()
+
 
 if __name__ == "__main__":
-    app = SidebarApp()
-    app.run()
+    run()

@@ -1,4 +1,4 @@
-
+from datetime import datetime, timezone
 TEMP = """-- Migration created at {ts}
 
 -- +migrate Up
@@ -12,8 +12,9 @@ TEMP = """-- Migration created at {ts}
 -- DROP TABLE example;
 """
 
-def render_temp():
-    pass
+def render() -> str:
+    return TEMP.format(ts=datetime.now(timezone.utc).isoformat())
 
-def verion_now():
-    pass
+
+def version_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
